@@ -1,0 +1,14 @@
+name: '🧪 Run Automated Tests'
+description: 'Runs project-specific automated test suite'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 🧪 Run Automated Tests
+      shell: bash
+      run: |
+        echo "=== 🧪 Test Suite Execution Stub ==="
+        echo "Replace this step with your project's test command (e.g., pytest, npm test, cargo test, ./tests/run_tests.sh)."
+        # Example:
+        # python3 -m unittest discover tests
+        # npm test
