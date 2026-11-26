@@ -7,16 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [unreleased]
 
 ### Added
-- Added modular codebase preparation composite action (`.github/actions/prepare-release/action.yml`) invoked before release/snapshot commits to apply on-the-fly codebase changes (e.g. updating `package.json`, `Cargo.toml`, or version constants).
-
-### Fixed
-- Fixed GitHub Actions runner failure in `.github/actions/deploy/action.yml` by replacing invalid `${{ secrets... }}` expression syntax in composite actions with standard environment variable references.
-
-## [2.0.0] -- 2026-11-26
-### Added
-- Modular composite GitHub Actions (`.github/actions/run-tests/action.yml` and `.github/actions/deploy/action.yml`) to cleanly separate test execution and deployment steps from workflow definitions.
+- Modular composite GitHub Actions (`.github/actions/run-tests/action.yml`, `.github/actions/prepare-release/action.yml`, and `.github/actions/deploy/action.yml`) to cleanly separate test execution, codebase preparation, and deployment steps from workflow definitions.
 - Dedicated workflows splitting release engineering: `release.yml` (official SemVer releases on main with `patch|minor|major` dropdown) and `snapshot.yml` (branch pre-releases on any branch).
-- Direct post-release deployment integration in `release.yml` (production) and `snapshot.yml` (staging), automatically skipped on dry runs.
+- Atomic post-release deployment execution in `release.yml` and `snapshot.yml` running *before* git commits and tags are pushed, preventing unreleased artifacts or failed deployments from corrupting git history and changelogs.
 - `-u` / `--update` flag to `git ci-init` to safely upgrade CI/CD workflows and release tooling in existing repositories without overwriting `CHANGELOG.md` or custom actions in `.github/actions/`.
 - `run_tests` and `dry_run` input checkboxes to `snapshot.yml` and `dry_run` to `release.yml` for previewing release plans safely.
 - Pull Request changelog linter in `ci.yml` ensuring `CHANGELOG.md` is updated on PRs (supports `[skip changelog]` in title).
