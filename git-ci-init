@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+set -e
+
+# ==============================================================================
+# git-ci-init
+# Bootstraps a production-ready CI/CD, automated testing, SemVer versioning,
+# and release structure into any Git repository.
+# Can be run directly as `git ci-init` or `git-ci-init`.
+# ==============================================================================
+
+show_help() {
+  cat << 'EOF'
+Usage: git ci-init [options] [target-directory]
+
+Initializes a standardized CI/CD, testing, and release engineering setup
+into the current (or specified) Git repository.
+
+Files bootstrapped:
+  .github/workflows/ci.yml      Cross-platform matrix CI (Ubuntu + macOS) on push/PR
+  .github/workflows/release.yml Manual SemVer dispatch release workflow
+  tools/release_version.py      SemVer version bumper & CHANGELOG.md synchronizer
+  VERSION                       Base semantic version tracking file
+  CHANGELOG.md                  Keep a Changelog template with ## [unreleased]
+  tests/run_tests.sh            Starter automated test runner with assertion helpers
+
+Options:
+  -f, --force       Overwrite existing files if they already exist.
+  -n, --dry-run     Show what files would be created without writing them.
+  --version <ver>   Initial version string (default: 0.1.0).
+  -h, --help        Show this help message.
+EOF
+}
+
+FORCE=false
+DRY_RUN=false
+INITIAL_VERSION="0.1.0"
+TARGET_DIR=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|--force)
+      FORCE=true
+      shift
+      ;;
+    -n|--dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --version)
+      INITIAL_VERSION="$2"
+      shift 2
+      ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    *)
+      if [ -z "$TARGET_DIR" ]; then
+        TARGET_DIR="$1"
+        shift
+      else
+        echo "Unknown option or extra argument: $1" >&2
+        show_help
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+# Resolve target directory
+if [ -z "$TARGET_DIR" ]; then
+  TARGET_DIR="."
+fi
+
+TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd || { echo "Error: Directory '$TARGET_DIR' not found." >&2; exit 1; })"
+
+# Check if target is inside a git repository
+if ! git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Warning: '$TARGET_DIR' is not a Git repository yet."
+  if [ "$DRY_RUN" = false ]; then
+    echo "--> Initializing git repository..."
+    git -C "$TARGET_DIR" init -b main >/dev/null 2>&1 || git -C "$TARGET_DIR" init >/dev/null
+  fi
+fi
+
+REPO_ROOT="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$TARGET_DIR")"
+
+echo "=== git ci-init ==="
+echo "Target Repository: $REPO_ROOT"
+echo "Initial Version:   $INITIAL_VERSION"
+echo ""
+
+FILES_TO_CREATE=(
+  ".github/workflows/ci.yml"
+  ".github/workflows/release.yml"
+  "tools/release_version.py"
+  "VERSION"
+  "CHANGELOG.md"
+  "tests/run_tests.sh"
+)
+
+echo "Files to bootstrap:"
+for rel in "${FILES_TO_CREATE[@]}"; do
+  full="$REPO_ROOT/$rel"
+  if [ -e "$full" ]; then
+    if [ "$FORCE" = true ]; then
+      echo "  [overwrite] $rel"
+    else
+      echo "  [skip]      $rel (already exists, use -f to overwrite)"
+    fi
+  else
+    echo "  [create]    $rel"
+  fi
+done
+echo ""
+
+if [ "$DRY_RUN" = true ]; then
+  echo "=== Dry run complete. No files were written. ==="
+  exit 0
+fi
+
+# Ensure parent directories exist
+mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/tools" "$REPO_ROOT/tests"
+
+should_write() {
+  local full_path="$REPO_ROOT/$1"
+  if [ -e "$full_path" ] && [ "$FORCE" = false ]; then
+    return 1
+  fi
+  echo "--> Writing $1..."
+  return 0
+}
+
+# 1. CI Workflow
+if should_write ".github/workflows/ci.yml"; then
+cat << 'EOF' > "$REPO_ROOT/.github/workflows/ci.yml"
+name: 🧪 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧪 Run Automated Tests
+        run: |
+          ./tests/run_tests.sh
+EOF
+fi
+
+# 2. Release Workflow
+if should_write ".github/workflows/release.yml"; then
+cat << 'EOF' > "$REPO_ROOT/.github/workflows/release.yml"
+name: 🏷️ Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'SemVer Version Bump'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 🚀 Create Release & Tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 🔢 Bump Version & Update Changelog
+        id: version_bump
+        run: |
+          python3 tools/release_version.py ${{ github.event.inputs.bump }}
+
+      - name: 🧪 Run Automated Tests
+        run: |
+          ./tests/run_tests.sh
+
+      - name: 🏷️ Commit, Tag & Push to Main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          VERSION="${{ steps.version_bump.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(cat VERSION)
+          fi
+          
+          echo "Releasing version: v$VERSION"
+          
+          git add VERSION CHANGELOG.md
+          git commit -m "chore(release): v$VERSION"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin main --follow-tags
+
+          # Create GitHub Release
+          gh release create "v$VERSION" \
+            --title "Release v$VERSION" \
+            --generate-notes
+EOF
+fi
+
+# 3. tools/release_version.py
+if should_write "tools/release_version.py"; then
+cat << 'EOF' > "$REPO_ROOT/tools/release_version.py"
+#!/usr/bin/env python3
+import os
+import sys
+import re
+import datetime
+
+VERSION_FILE = 'VERSION'
+CHANGELOG_FILE = 'CHANGELOG.md'
+
+def bump_version(current_version, bump_type):
+    parts = current_version.split('.')
+    if len(parts) != 3:
+        raise ValueError(f"Version {current_version} is not in SemVer format (X.Y.Z)")
+    
+    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+    
+    if bump_type == 'major':
+        major += 1
+        minor = 0
+        patch = 0
+    elif bump_type == 'minor':
+        minor += 1
+        patch = 0
+    elif bump_type == 'patch':
+        patch += 1
+    else:
+        raise ValueError(f"Unknown bump type: '{bump_type}'. Expected 'patch', 'minor', or 'major'.")
+        
+    return f"{major}.{minor}.{patch}"
+
+def update_version_file(new_version):
+    with open(VERSION_FILE, 'w', encoding='utf-8') as f:
+        f.write(new_version + '\n')
+
+def update_changelog_file(new_version):
+    today = datetime.date.today().isoformat()
+    new_release_heading = f"## [{new_version}] -- {today}"
+    
+    if not os.path.exists(CHANGELOG_FILE):
+        content = f"# Changelog\n\n## [unreleased]\n\n{new_release_heading}\n"
+    else:
+        with open(CHANGELOG_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Anchor precisely on markdown heading '## [unreleased]'
+        if re.search(r'^## \[unreleased\]\s*$', content, flags=re.MULTILINE):
+            content = re.sub(
+                r'^## \[unreleased\]\s*$',
+                f"## [unreleased]\n\n{new_release_heading}",
+                content,
+                count=1,
+                flags=re.MULTILINE
+            )
+        else:
+            content = f"# Changelog\n\n## [unreleased]\n\n{new_release_heading}\n\n" + content
+
+    with open(CHANGELOG_FILE, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 tools/release_version.py <patch|minor|major>")
+        sys.exit(1)
+        
+    bump_type = sys.argv[1].lower().strip()
+    
+    current_version = "0.1.0"
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE, 'r', encoding='utf-8') as f:
+            v = f.read().strip()
+            if v:
+                current_version = v
+                
+    new_version = bump_version(current_version, bump_type)
+    print(f"SemVer bump ({bump_type}): {current_version} -> {new_version}")
+    
+    update_version_file(new_version)
+    update_changelog_file(new_version)
+    
+    github_output = os.environ.get('GITHUB_OUTPUT')
+    if github_output:
+        with open(github_output, 'a', encoding='utf-8') as f:
+            f.write(f"version={new_version}\n")
+    print(f"Release v{new_version} prepared successfully.")
+
+if __name__ == '__main__':
+    main()
+EOF
+chmod +x "$REPO_ROOT/tools/release_version.py"
+fi
+
+# 4. VERSION
+if should_write "VERSION"; then
+  echo "$INITIAL_VERSION" > "$REPO_ROOT/VERSION"
+fi
+
+# 5. CHANGELOG.md
+if should_write "CHANGELOG.md"; then
+cat << 'EOF' > "$REPO_ROOT/CHANGELOG.md"
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [unreleased]
+
+### Added
+- Initial setup.
+EOF
+fi
+
+# 6. tests/run_tests.sh
+if should_write "tests/run_tests.sh"; then
+cat << 'EOF' > "$REPO_ROOT/tests/run_tests.sh"
+#!/usr/bin/env bash
+set -e
+
+# Starter Automated Test Suite
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+BLUE="\033[0;34m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# Create isolated test sandbox
+TEST_SANDBOX=$(mktemp -d /tmp/test-sandbox-XXXXXX)
+cleanup() { rm -rf "$TEST_SANDBOX"; }
+trap cleanup EXIT
+
+assert() {
+  local condition="$1"
+  local message="$2"
+  if ! eval "$condition"; then
+    echo -e "    ${RED}Assertion failed:${RESET} $message"
+    return 1
+  fi
+  return 0
+}
+
+run_test() {
+  local test_name="$1"
+  TESTS_RUN=$((TESTS_RUN + 1))
+  echo -e "${BLUE}Running:${RESET} $test_name..."
+  if ( $test_name ); then
+    echo -e "  ${GREEN}✓ PASSED${RESET}\n"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo -e "  ${RED}✗ FAILED${RESET}\n"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+}
+
+# Example test case
+test_example() {
+  assert "[ 1 -eq 1 ]" "Math works"
+  assert "[ -f \"$ROOT_DIR/VERSION\" ]" "VERSION file exists"
+}
+
+echo -e "${BOLD}=== Running Automated Test Suite ===${RESET}\n"
+run_test test_example
+
+echo -e "${BOLD}=== Test Results ===${RESET}"
+echo -e "Total:  $TESTS_RUN"
+echo -e "Passed: ${GREEN}$TESTS_PASSED${RESET}"
+if [ "$TESTS_FAILED" -gt 0 ]; then
+  echo -e "Failed: ${RED}$TESTS_FAILED${RESET}"
+  exit 1
+else
+  echo -e "Failed: 0"
+  echo -e "\n${GREEN}${BOLD}All tests passed successfully!${RESET}"
+  exit 0
+fi
+EOF
+chmod +x "$REPO_ROOT/tests/run_tests.sh"
+fi
+
+echo ""
+echo "=== Bootstrap Complete! ==="
+echo "The repository is now equipped with:"
+echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
+echo "  - Automated SemVer release pipeline (.github/workflows/release.yml)"
+echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
+echo "  - Base version tracking (VERSION)"
+echo "  - Automated test runner (tests/run_tests.sh)"
+echo ""
+echo "You can verify the setup right away by running:"
+echo "  ./tests/run_tests.sh"
