@@ -86,22 +86,25 @@ test_dry_run_leaves_directory_empty() {
   assert_file_not_exists "$repo/CHANGELOG.md"
 }
 
-test_bootstrap_creates_all_files() {
+test_bootstrap_creates_all_files_without_version_file() {
   local repo="$TEST_SANDBOX/test_bootstrap"
   mkdir -p "$repo" && cd "$repo"
   git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Initial" > init.txt && git add init.txt && git commit -m "Init" >/dev/null
 
   "$GIT_CI_INIT" --version "1.0.0" >/dev/null
 
   assert_file_exists "$repo/.github/workflows/ci.yml"
   assert_file_exists "$repo/.github/workflows/release.yml"
   assert_file_exists "$repo/tools/release_version.py"
-  assert_file_exists "$repo/VERSION"
   assert_file_exists "$repo/CHANGELOG.md"
   assert_file_exists "$repo/tests/run_tests.sh"
+  assert_file_not_exists "$repo/VERSION"
 
-  assert_file_contains "$repo/VERSION" "1.0.0"
   assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
+  assert "[ '$(git tag -l v1.0.0)' = 'v1.0.0' ]" "Expected initial Git tag v1.0.0 to exist"
 }
 
 test_generated_test_suite_executes_successfully() {
@@ -117,18 +120,21 @@ test_generated_test_suite_executes_successfully() {
   assert "[ $? -eq 0 ]" "Expected generated ./tests/run_tests.sh to pass"
 }
 
-test_generated_release_script_bumps_semver_and_changelog() {
+test_generated_release_script_bumps_semver_from_tags() {
   local repo="$TEST_SANDBOX/test_generated_release"
   mkdir -p "$repo" && cd "$repo"
   git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Init" > file.txt && git add file.txt && git commit -m "Init" >/dev/null
 
   "$GIT_CI_INIT" --version "0.1.0" >/dev/null
 
   python3 tools/release_version.py minor >/dev/null
 
-  assert_file_contains "$repo/VERSION" "0.2.0"
   assert_file_contains "$repo/CHANGELOG.md" "## [0.2.0]"
   assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
+  assert_file_not_exists "$repo/VERSION"
 }
 
 test_skip_existing_files_without_force() {
@@ -136,12 +142,12 @@ test_skip_existing_files_without_force() {
   mkdir -p "$repo" && cd "$repo"
   git init -b main >/dev/null 2>&1
 
-  echo "CUSTOM VERSION 9.9.9" > VERSION
+  echo "CUSTOM CHANGELOG" > CHANGELOG.md
 
-  # Running without -f should preserve custom VERSION
+  # Running without -f should preserve custom CHANGELOG.md
   "$GIT_CI_INIT" >/dev/null
 
-  assert_file_contains "$repo/VERSION" "CUSTOM VERSION 9.9.9"
+  assert_file_contains "$repo/CHANGELOG.md" "CUSTOM CHANGELOG"
 }
 
 test_force_flag_overwrites_existing_files() {
@@ -149,12 +155,12 @@ test_force_flag_overwrites_existing_files() {
   mkdir -p "$repo" && cd "$repo"
   git init -b main >/dev/null 2>&1
 
-  echo "CUSTOM VERSION 9.9.9" > VERSION
+  echo "CUSTOM CHANGELOG" > CHANGELOG.md
 
   # Running with -f should overwrite
-  "$GIT_CI_INIT" -f --version "2.0.0" >/dev/null
+  "$GIT_CI_INIT" -f >/dev/null
 
-  assert_file_contains "$repo/VERSION" "2.0.0"
+  assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
 }
 
 # ==============================================================================
@@ -164,9 +170,9 @@ test_force_flag_overwrites_existing_files() {
 echo -e "${BOLD}=== Running git-ci-init Automated Test Suite ===${RESET}\n"
 
 run_test test_dry_run_leaves_directory_empty
-run_test test_bootstrap_creates_all_files
+run_test test_bootstrap_creates_all_files_without_version_file
 run_test test_generated_test_suite_executes_successfully
-run_test test_generated_release_script_bumps_semver_and_changelog
+run_test test_generated_release_script_bumps_semver_from_tags
 run_test test_skip_existing_files_without_force
 run_test test_force_flag_overwrites_existing_files
 

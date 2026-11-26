@@ -3,9 +3,9 @@ set -e
 
 # ==============================================================================
 # git-ci-init
-# Bootstraps a production-ready CI/CD, automated testing, SemVer versioning,
+# Bootstraps a production-ready CI/CD, automated testing, SemVer versioning (via git tags),
 # and release structure into any Git repository.
-# Can be run directly as `git ci-init` or `git-ci-init`.
+# Can be run directly as `git ci-init` or `ci-init`.
 # ==============================================================================
 
 show_help() {
@@ -13,20 +13,20 @@ show_help() {
 Usage: git ci-init [options] [target-directory]
 
 Initializes a standardized CI/CD, testing, and release engineering setup
-into the current (or specified) Git repository.
+into the current (or specified) Git repository. Versioning is managed directly
+via Git tags (vX.Y.Z) without redundant VERSION files.
 
 Files bootstrapped:
   .github/workflows/ci.yml      Cross-platform matrix CI (Ubuntu + macOS) on push/PR
   .github/workflows/release.yml Manual SemVer dispatch release workflow
-  tools/release_version.py      SemVer version bumper & CHANGELOG.md synchronizer
-  VERSION                       Base semantic version tracking file
+  tools/release_version.py      Git-tag SemVer bumper & CHANGELOG.md synchronizer
   CHANGELOG.md                  Keep a Changelog template with ## [unreleased]
   tests/run_tests.sh            Starter automated test runner with assertion helpers
 
 Options:
   -f, --force       Overwrite existing files if they already exist.
   -n, --dry-run     Show what files would be created without writing them.
-  --version <ver>   Initial version string (default: 0.1.0).
+  --version <ver>   Initial version string for tag (default: 0.1.0).
   -h, --help        Show this help message.
 EOF
 }
@@ -87,14 +87,13 @@ REPO_ROOT="$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null || echo 
 
 echo "=== git ci-init ==="
 echo "Target Repository: $REPO_ROOT"
-echo "Initial Version:   $INITIAL_VERSION"
+echo "Initial Tag:       v$INITIAL_VERSION"
 echo ""
 
 FILES_TO_CREATE=(
   ".github/workflows/ci.yml"
   ".github/workflows/release.yml"
   "tools/release_version.py"
-  "VERSION"
   "CHANGELOG.md"
   "tests/run_tests.sh"
 )
@@ -215,12 +214,13 @@ jobs:
           
           VERSION="${{ steps.version_bump.outputs.version }}"
           if [ -z "$VERSION" ]; then
-            VERSION=$(cat VERSION)
+            echo "Error: Version not set by version_bump step." >&2
+            exit 1
           fi
           
           echo "Releasing version: v$VERSION"
           
-          git add VERSION CHANGELOG.md
+          git add CHANGELOG.md
           git commit -m "chore(release): v$VERSION"
           git tag -a "v$VERSION" -m "Release v$VERSION"
           git push origin main --follow-tags
@@ -240,9 +240,47 @@ import os
 import sys
 import re
 import datetime
+import subprocess
 
-VERSION_FILE = 'VERSION'
 CHANGELOG_FILE = 'CHANGELOG.md'
+
+def get_current_version():
+    # 1. Try git describe (latest tag reachable on current branch)
+    try:
+        tag = subprocess.check_output(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+        if tag:
+            return tag.lstrip('v')
+    except Exception:
+        pass
+
+    # 2. Try git tag list sorted by version
+    try:
+        tags = subprocess.check_output(
+            ["git", "tag", "--sort=-version:refname"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').splitlines()
+        for t in tags:
+            t = t.strip()
+            if t:
+                return t.lstrip('v')
+    except Exception:
+        pass
+
+    # 3. Try reading latest version heading from CHANGELOG.md
+    if os.path.exists(CHANGELOG_FILE):
+        try:
+            with open(CHANGELOG_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    m = re.match(r'^##\s*\[(\d+\.\d+\.\d+)\]', line.strip())
+                    if m:
+                        return m.group(1)
+        except Exception:
+            pass
+
+    return "0.1.0"
 
 def bump_version(current_version, bump_type):
     parts = current_version.split('.')
@@ -265,10 +303,6 @@ def bump_version(current_version, bump_type):
         
     return f"{major}.{minor}.{patch}"
 
-def update_version_file(new_version):
-    with open(VERSION_FILE, 'w', encoding='utf-8') as f:
-        f.write(new_version + '\n')
-
 def update_changelog_file(new_version):
     today = datetime.date.today().isoformat()
     new_release_heading = f"## [{new_version}] -- {today}"
@@ -279,7 +313,6 @@ def update_changelog_file(new_version):
         with open(CHANGELOG_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Anchor precisely on markdown heading '## [unreleased]'
         if re.search(r'^## \[unreleased\]\s*$', content, flags=re.MULTILINE):
             content = re.sub(
                 r'^## \[unreleased\]\s*$',
@@ -301,17 +334,10 @@ def main():
         
     bump_type = sys.argv[1].lower().strip()
     
-    current_version = "0.1.0"
-    if os.path.exists(VERSION_FILE):
-        with open(VERSION_FILE, 'r', encoding='utf-8') as f:
-            v = f.read().strip()
-            if v:
-                current_version = v
-                
+    current_version = get_current_version()
     new_version = bump_version(current_version, bump_type)
     print(f"SemVer bump ({bump_type}): {current_version} -> {new_version}")
     
-    update_version_file(new_version)
     update_changelog_file(new_version)
     
     github_output = os.environ.get('GITHUB_OUTPUT')
@@ -326,12 +352,7 @@ EOF
 chmod +x "$REPO_ROOT/tools/release_version.py"
 fi
 
-# 4. VERSION
-if should_write "VERSION"; then
-  echo "$INITIAL_VERSION" > "$REPO_ROOT/VERSION"
-fi
-
-# 5. CHANGELOG.md
+# 4. CHANGELOG.md
 if should_write "CHANGELOG.md"; then
 cat << 'EOF' > "$REPO_ROOT/CHANGELOG.md"
 # Changelog
@@ -347,7 +368,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 EOF
 fi
 
-# 6. tests/run_tests.sh
+# 5. tests/run_tests.sh
 if should_write "tests/run_tests.sh"; then
 cat << 'EOF' > "$REPO_ROOT/tests/run_tests.sh"
 #!/usr/bin/env bash
@@ -398,7 +419,7 @@ run_test() {
 # Example test case
 test_example() {
   assert "[ 1 -eq 1 ]" "Math works"
-  assert "[ -f \"$ROOT_DIR/VERSION\" ]" "VERSION file exists"
+  assert "[ -f \"$ROOT_DIR/CHANGELOG.md\" ]" "CHANGELOG.md file exists"
 }
 
 echo -e "${BOLD}=== Running Automated Test Suite ===${RESET}\n"
@@ -419,13 +440,22 @@ EOF
 chmod +x "$REPO_ROOT/tests/run_tests.sh"
 fi
 
+# 6. Initialize initial Git tag if repository has commits and no tags
+if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+  EXISTING_TAGS=$(git -C "$REPO_ROOT" tag -l "v*" 2>/dev/null || true)
+  if [ -z "$EXISTING_TAGS" ]; then
+    echo "--> Tagging repository with initial version: v$INITIAL_VERSION..."
+    git -C "$REPO_ROOT" tag -a "v$INITIAL_VERSION" -m "Initial release v$INITIAL_VERSION" >/dev/null 2>&1 || true
+  fi
+fi
+
 echo ""
 echo "=== Bootstrap Complete! ==="
 echo "The repository is now equipped with:"
 echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
 echo "  - Automated SemVer release pipeline (.github/workflows/release.yml)"
 echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
-echo "  - Base version tracking (VERSION)"
+echo "  - Git tag-based versioning (no VERSION file needed)"
 echo "  - Automated test runner (tests/run_tests.sh)"
 echo ""
 echo "You can verify the setup right away by running:"

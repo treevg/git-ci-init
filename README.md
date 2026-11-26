@@ -17,8 +17,7 @@ your-repo/
 ├── tests/
 │   └── run_tests.sh               # Standalone test runner with /tmp sandboxing & assertion helpers
 ├── tools/
-│   └── release_version.py         # SemVer bumper managing VERSION & the Keep a Changelog standard
-├── VERSION                        # Semantic version tracking file (e.g., 0.1.0)
+│   └── release_version.py         # SemVer bumper managing Git tags & Keep a Changelog standard
 └── CHANGELOG.md                   # Keep a Changelog template with the ## [unreleased] placeholder
 ```
 
