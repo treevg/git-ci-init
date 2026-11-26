@@ -98,6 +98,7 @@ test_bootstrap_creates_all_files_without_version_file() {
 
   assert_file_exists "$repo/.github/workflows/ci.yml"
   assert_file_exists "$repo/.github/workflows/release.yml"
+  assert_file_exists "$repo/.github/workflows/snapshot.yml"
   assert_file_exists "$repo/tools/release_version.py"
   assert_file_exists "$repo/CHANGELOG.md"
   assert_file_exists "$repo/tests/run_tests.sh"
@@ -163,6 +164,81 @@ test_force_flag_overwrites_existing_files() {
   assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
 }
 
+test_generated_release_script_branch_snapshot_initial() {
+  local repo="$TEST_SANDBOX/test_branch_snapshot_initial"
+  mkdir -p "$repo" && cd "$repo"
+  git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Init" > file.txt && git add file.txt && git commit -m "Init" >/dev/null
+
+  "$GIT_CI_INIT" --version "1.3.3" >/dev/null
+
+  # Switch to a feature branch with a slash
+  git checkout -b feature/my-branch-name >/dev/null 2>&1
+
+  # Run snapshot release command
+  export GITHUB_OUTPUT="$repo/github_output.txt"
+  python3 tools/release_version.py snapshot >/dev/null
+
+  # Version should increase patch from 1.3.3 to 1.3.4, slugify slashes to dashes, and append .1
+  assert "grep -q 'version=1.3.4-feature-my-branch-name.1' '$GITHUB_OUTPUT'" "Expected version 1.3.4-feature-my-branch-name.1 in GITHUB_OUTPUT"
+  
+  # CHANGELOG.md should remain completely untouched for snapshots
+  assert "! grep -q '1.3.4-feature-my-branch-name.1' '$repo/CHANGELOG.md'" "CHANGELOG.md should NOT contain snapshot header"
+  assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
+  unset GITHUB_OUTPUT
+}
+
+test_generated_release_script_branch_snapshot_incrementing_suffix() {
+  local repo="$TEST_SANDBOX/test_branch_snapshot_suffix"
+  mkdir -p "$repo" && cd "$repo"
+  git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Init" > file.txt && git add file.txt && git commit -m "Init" >/dev/null
+
+  "$GIT_CI_INIT" --version "1.0.0" >/dev/null
+
+  # Switch to fix branch
+  git checkout -b fix/branch-id >/dev/null 2>&1
+
+  # Simulate existing snapshot tags (.1 and .2)
+  git tag -a "v1.0.1-fix-branch-id.1" -m "Snapshot 1" >/dev/null 2>&1
+  git tag -a "v1.0.1-fix-branch-id.2" -m "Snapshot 2" >/dev/null 2>&1
+
+  # Run snapshot release command
+  export GITHUB_OUTPUT="$repo/github_output.txt"
+  python3 tools/release_version.py snapshot >/dev/null
+
+  # Suffix should increment to .3
+  assert "grep -q 'version=1.0.1-fix-branch-id.3' '$GITHUB_OUTPUT'" "Expected version 1.0.1-fix-branch-id.3 in GITHUB_OUTPUT"
+  
+  # CHANGELOG.md should remain untouched
+  assert "! grep -q '1.0.1-fix-branch-id.3' '$repo/CHANGELOG.md'" "CHANGELOG.md should NOT contain snapshot header"
+  assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
+  unset GITHUB_OUTPUT
+}
+
+test_generated_release_script_dry_run_leaves_changelog_untouched() {
+  local repo="$TEST_SANDBOX/test_release_dry_run"
+  mkdir -p "$repo" && cd "$repo"
+  git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Init" > file.txt && git add file.txt && git commit -m "Init" >/dev/null
+
+  "$GIT_CI_INIT" --version "0.1.0" >/dev/null
+
+  # Dry run should NOT update CHANGELOG.md
+  python3 tools/release_version.py minor --dry-run >/dev/null
+  assert "! grep -q '## \[0.2.0\]' '$repo/CHANGELOG.md'" "Dry run should NOT write to CHANGELOG.md"
+
+  # Actual run should update CHANGELOG.md
+  python3 tools/release_version.py minor >/dev/null
+  assert_file_contains "$repo/CHANGELOG.md" "## [0.2.0]"
+}
+
 # ==============================================================================
 # Suite Runner
 # ==============================================================================
@@ -175,6 +251,9 @@ run_test test_generated_test_suite_executes_successfully
 run_test test_generated_release_script_bumps_semver_from_tags
 run_test test_skip_existing_files_without_force
 run_test test_force_flag_overwrites_existing_files
+run_test test_generated_release_script_branch_snapshot_initial
+run_test test_generated_release_script_branch_snapshot_incrementing_suffix
+run_test test_generated_release_script_dry_run_leaves_changelog_untouched
 
 echo -e "${BOLD}=== Test Results ===${RESET}"
 echo -e "Total:  $TESTS_RUN"

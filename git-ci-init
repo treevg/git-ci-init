@@ -17,11 +17,12 @@ into the current (or specified) Git repository. Versioning is managed directly
 via Git tags (vX.Y.Z) without redundant VERSION files.
 
 Files bootstrapped:
-  .github/workflows/ci.yml      Cross-platform matrix CI (Ubuntu + macOS) on push/PR
-  .github/workflows/release.yml Manual SemVer dispatch release workflow
-  tools/release_version.py      Git-tag SemVer bumper & CHANGELOG.md synchronizer
-  CHANGELOG.md                  Keep a Changelog template with ## [unreleased]
-  tests/run_tests.sh            Starter automated test runner with assertion helpers
+  .github/workflows/ci.yml        Cross-platform matrix CI (Ubuntu + macOS) on push/PR
+  .github/workflows/release.yml   Manual SemVer dispatch release workflow (main branch only)
+  .github/workflows/snapshot.yml  Manual branch snapshot pre-release workflow (any branch)
+  tools/release_version.py        Git-tag SemVer bumper & CHANGELOG.md synchronizer
+  CHANGELOG.md                    Keep a Changelog template with ## [unreleased]
+  tests/run_tests.sh              Starter automated test runner with assertion helpers
 
 Options:
   -f, --force       Overwrite existing files if they already exist.
@@ -93,6 +94,7 @@ echo ""
 FILES_TO_CREATE=(
   ".github/workflows/ci.yml"
   ".github/workflows/release.yml"
+  ".github/workflows/snapshot.yml"
   "tools/release_version.py"
   "CHANGELOG.md"
   "tests/run_tests.sh"
@@ -156,10 +158,39 @@ jobs:
       - name: 🧪 Run Automated Tests
         run: |
           ./tests/run_tests.sh
+
+  changelog:
+    name: 📝 Lint Changelog (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Verify CHANGELOG.md was updated
+        run: |
+          # Allow explicit bypass if PR title contains [skip changelog]
+          if echo "${{ github.event.pull_request.title }}" | grep -iq "\[skip changelog\]"; then
+            echo "Skipping changelog check: '[skip changelog]' found in PR title."
+            exit 0
+          fi
+
+          # Ensure the base branch ref is available
+          git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }} || true
+
+          # Check if CHANGELOG.md was modified in this pull request
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^CHANGELOG\.md$"; then
+            echo "✓ CHANGELOG.md has been modified in this pull request."
+          else
+            echo "::error file=CHANGELOG.md::No changes detected in CHANGELOG.md! Please document your changes under '## [unreleased]' (or include '[skip changelog]' in the PR title if exempt)."
+            exit 1
+          fi
 EOF
 fi
 
-# 2. Release Workflow
+# 2. Release Workflow (Official SemVer releases on main)
 if should_write ".github/workflows/release.yml"; then
 cat << 'EOF' > "$REPO_ROOT/.github/workflows/release.yml"
 name: 🏷️ Release
@@ -176,6 +207,11 @@ on:
           - patch
           - minor
           - major
+      dry_run:
+        description: 'Dry run (preview release without committing, tagging, or pushing)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -184,6 +220,7 @@ jobs:
   release:
     name: 🚀 Create Release & Tag
     runs-on: ubuntu-latest
+    if: github.ref_name == 'main'
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
@@ -199,7 +236,11 @@ jobs:
       - name: 🔢 Bump Version & Update Changelog
         id: version_bump
         run: |
-          python3 tools/release_version.py ${{ github.event.inputs.bump }}
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          python3 tools/release_version.py ${{ github.event.inputs.bump }} $DRY_RUN_FLAG
 
       - name: 🧪 Run Automated Tests
         run: |
@@ -209,14 +250,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           VERSION="${{ steps.version_bump.outputs.version }}"
           if [ -z "$VERSION" ]; then
             echo "Error: Version not set by version_bump step." >&2
             exit 1
           fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN RELEASE PREVIEW ==="
+            echo "Target Version: v$VERSION"
+            echo "Commit Message: chore(release): v$VERSION"
+            echo "Git Tag:        v$VERSION"
+            echo "Target Branch:  main"
+            echo "GitHub Release: v$VERSION"
+            echo "Dry run enabled: no commits, tags, or GitHub releases were published."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
           echo "Releasing version: v$VERSION"
           
@@ -232,7 +284,95 @@ jobs:
 EOF
 fi
 
-# 3. tools/release_version.py
+# 3. Snapshot Workflow (Pre-releases on any branch)
+if should_write ".github/workflows/snapshot.yml"; then
+cat << 'EOF' > "$REPO_ROOT/.github/workflows/snapshot.yml"
+name: 📸 Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: 'Run automated tests'
+        required: false
+        default: true
+        type: boolean
+      dry_run:
+        description: 'Dry run (preview snapshot without tagging or pushing)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    name: 🚀 Create Snapshot Pre-Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 🔢 Calculate Snapshot Version
+        id: version_bump
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          python3 tools/release_version.py snapshot --branch "${{ github.ref_name }}" $DRY_RUN_FLAG
+
+      - name: 🧪 Run Automated Tests
+        if: ${{ inputs.run_tests != false }}
+        run: |
+          ./tests/run_tests.sh
+
+      - name: 🏷️ Tag & Publish Pre-Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version_bump.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            echo "Error: Version not set by version_bump step." >&2
+            exit 1
+          fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN SNAPSHOT PREVIEW ==="
+            echo "Snapshot Version: v$VERSION"
+            echo "Branch Ref:       ${{ github.ref_name }}"
+            echo "Git Tag:          v$VERSION"
+            echo "GitHub Release:   v$VERSION (pre-release)"
+            echo "Dry run enabled: no tags or pre-releases were published."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "Publishing snapshot: v$VERSION (branch: ${{ github.ref_name }})"
+          
+          git tag -a "v$VERSION" -m "Snapshot release v$VERSION"
+          git push origin "v$VERSION"
+
+          # Create GitHub Pre-Release
+          gh release create "v$VERSION" \
+            --title "Release v$VERSION" \
+            --prerelease \
+            --generate-notes
+EOF
+fi
+
+# 4. tools/release_version.py
 if should_write "tools/release_version.py"; then
 cat << 'EOF' > "$REPO_ROOT/tools/release_version.py"
 #!/usr/bin/env python3
@@ -241,35 +381,60 @@ import sys
 import re
 import datetime
 import subprocess
+import argparse
 
 CHANGELOG_FILE = 'CHANGELOG.md'
 
-def get_current_version():
-    # 1. Try git describe (latest tag reachable on current branch)
-    try:
-        tag = subprocess.check_output(
-            ["git", "describe", "--tags", "--abbrev=0"],
-            stderr=subprocess.DEVNULL
-        ).decode('utf-8').strip()
-        if tag:
-            return tag.lstrip('v')
-    except Exception:
-        pass
+def parse_semver(version_str):
+    parts = version_str.split('.')
+    if len(parts) != 3:
+        raise ValueError(f"Version '{version_str}' is not in SemVer format (X.Y.Z)")
+    return int(parts[0]), int(parts[1]), int(parts[2])
 
-    # 2. Try git tag list sorted by version
+def get_latest_stable_version():
+    """
+    Finds the latest stable SemVer release version (X.Y.Z) in the repository.
+    Ignores pre-release and snapshot tags (e.g. 1.0.1-feature.1).
+    """
+    semver_pattern = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)$')
+
+    # 1. Try tags reachable from HEAD
     try:
         tags = subprocess.check_output(
-            ["git", "tag", "--sort=-version:refname"],
+            ["git", "tag", "--merged", "HEAD"],
             stderr=subprocess.DEVNULL
         ).decode('utf-8').splitlines()
+        stable_tags = []
         for t in tags:
-            t = t.strip()
-            if t:
-                return t.lstrip('v')
+            m = semver_pattern.match(t.strip())
+            if m:
+                stable_tags.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        if stable_tags:
+            stable_tags.sort()
+            latest = stable_tags[-1]
+            return f"{latest[0]}.{latest[1]}.{latest[2]}"
     except Exception:
         pass
 
-    # 3. Try reading latest version heading from CHANGELOG.md
+    # 2. Try all tags in the repository
+    try:
+        tags = subprocess.check_output(
+            ["git", "tag", "-l"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').splitlines()
+        stable_tags = []
+        for t in tags:
+            m = semver_pattern.match(t.strip())
+            if m:
+                stable_tags.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        if stable_tags:
+            stable_tags.sort()
+            latest = stable_tags[-1]
+            return f"{latest[0]}.{latest[1]}.{latest[2]}"
+    except Exception:
+        pass
+
+    # 3. Try reading latest stable version heading from CHANGELOG.md
     if os.path.exists(CHANGELOG_FILE):
         try:
             with open(CHANGELOG_FILE, 'r', encoding='utf-8') as f:
@@ -282,13 +447,8 @@ def get_current_version():
 
     return "0.1.0"
 
-def bump_version(current_version, bump_type):
-    parts = current_version.split('.')
-    if len(parts) != 3:
-        raise ValueError(f"Version {current_version} is not in SemVer format (X.Y.Z)")
-    
-    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    
+def bump_semver(current_version, bump_type):
+    major, minor, patch = parse_semver(current_version)
     if bump_type == 'major':
         major += 1
         minor = 0
@@ -300,8 +460,59 @@ def bump_version(current_version, bump_type):
         patch += 1
     else:
         raise ValueError(f"Unknown bump type: '{bump_type}'. Expected 'patch', 'minor', or 'major'.")
-        
     return f"{major}.{minor}.{patch}"
+
+def get_current_branch(explicit_branch=None):
+    if explicit_branch:
+        return explicit_branch.strip()
+    
+    env_branch = os.environ.get('GITHUB_REF_NAME') or os.environ.get('BRANCH_NAME')
+    if env_branch:
+        return env_branch.strip()
+    
+    try:
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+        if branch:
+            return branch
+    except Exception:
+        pass
+
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+        if branch and branch != "HEAD":
+            return branch
+    except Exception:
+        pass
+
+    return "main"
+
+def compute_snapshot_version(base_stable_version, branch_name):
+    major, minor, patch = parse_semver(base_stable_version)
+    bumped_patch = f"{major}.{minor}.{patch + 1}"
+    branch_slug = re.sub(r'[/]+', '-', branch_name.strip()).strip('-')
+    
+    tag_pattern = re.compile(rf"^v?{re.escape(bumped_patch)}-{re.escape(branch_slug)}\.(\d+)$")
+    suffixes = []
+    try:
+        tags = subprocess.check_output(
+            ["git", "tag", "-l"],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').splitlines()
+        for t in tags:
+            m = tag_pattern.match(t.strip())
+            if m:
+                suffixes.append(int(m.group(1)))
+    except Exception:
+        pass
+
+    next_suffix = max(suffixes) + 1 if suffixes else 1
+    return f"{bumped_patch}-{branch_slug}.{next_suffix}"
 
 def update_changelog_file(new_version):
     today = datetime.date.today().isoformat()
@@ -328,23 +539,39 @@ def update_changelog_file(new_version):
         f.write(content)
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 tools/release_version.py <patch|minor|major>")
-        sys.exit(1)
-        
-    bump_type = sys.argv[1].lower().strip()
+    parser = argparse.ArgumentParser(description="SemVer bumper and Keep a Changelog manager")
+    parser.add_argument("action", choices=["patch", "minor", "major", "snapshot"],
+                        help="Action to perform: SemVer bump (patch, minor, major) for official release, or snapshot")
+    parser.add_argument("--branch", dest="branch", default=None,
+                        help="Branch name for snapshot pre-releases (auto-detected if omitted)")
+    parser.add_argument("-n", "--dry-run", dest="dry_run", action="store_true",
+                        help="Preview version calculation without modifying CHANGELOG.md")
     
-    current_version = get_current_version()
-    new_version = bump_version(current_version, bump_type)
-    print(f"SemVer bump ({bump_type}): {current_version} -> {new_version}")
-    
-    update_changelog_file(new_version)
-    
+    args = parser.parse_args()
+    current_stable = get_latest_stable_version()
+
+    if args.action == "snapshot":
+        branch = get_current_branch(args.branch)
+        new_version = compute_snapshot_version(current_stable, branch)
+        prefix = "[Dry Run] " if args.dry_run else ""
+        print(f"{prefix}Branch snapshot pre-release ('{branch}'): {current_stable} -> {new_version}")
+        print(f"{prefix}CHANGELOG.md left untouched for snapshot release.")
+    else:
+        new_version = bump_semver(current_stable, args.action)
+        if args.dry_run:
+            print(f"[Dry Run] Official release SemVer bump ({args.action}): {current_stable} -> {new_version}")
+            print(f"[Dry Run] CHANGELOG.md would be updated with: ## [{new_version}] -- {datetime.date.today().isoformat()}")
+        else:
+            print(f"Official release SemVer bump ({args.action}): {current_stable} -> {new_version}")
+            update_changelog_file(new_version)
+
     github_output = os.environ.get('GITHUB_OUTPUT')
     if github_output:
         with open(github_output, 'a', encoding='utf-8') as f:
             f.write(f"version={new_version}\n")
-    print(f"Release v{new_version} prepared successfully.")
+
+    status_msg = "previewed" if args.dry_run else "prepared"
+    print(f"Version v{new_version} {status_msg} successfully.")
 
 if __name__ == '__main__':
     main()
@@ -454,6 +681,7 @@ echo "=== Bootstrap Complete! ==="
 echo "The repository is now equipped with:"
 echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
 echo "  - Automated SemVer release pipeline (.github/workflows/release.yml)"
+echo "  - Branch snapshot pre-release pipeline (.github/workflows/snapshot.yml)"
 echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
 echo "  - Git tag-based versioning (no VERSION file needed)"
 echo "  - Automated test runner (tests/run_tests.sh)"
