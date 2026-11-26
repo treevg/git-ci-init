@@ -20,8 +20,9 @@ Files bootstrapped:
   .github/workflows/ci.yml        Cross-platform matrix CI (Ubuntu + macOS) on push/PR
   .github/workflows/release.yml   Manual SemVer dispatch release & deployment (main branch only)
   .github/workflows/snapshot.yml  Manual branch snapshot pre-release & deployment (any branch)
-  .github/actions/run-tests/action.yml  Test suite execution stub composite action
-  .github/actions/deploy/action.yml     Deployment execution composite action (staging & prod)
+  .github/actions/run-tests/action.yml        Test suite execution stub composite action
+  .github/actions/prepare-release/action.yml  Codebase preparation stub (e.g. bumping package version)
+  .github/actions/deploy/action.yml           Deployment execution composite action (staging & prod)
   tools/release_version.py        Git-tag SemVer bumper & CHANGELOG.md synchronizer
   CHANGELOG.md                    Keep a Changelog template with ## [unreleased]
 
@@ -103,6 +104,7 @@ FILES_TO_CREATE=(
   ".github/workflows/release.yml"
   ".github/workflows/snapshot.yml"
   ".github/actions/run-tests/action.yml"
+  ".github/actions/prepare-release/action.yml"
   ".github/actions/deploy/action.yml"
   "tools/release_version.py"
   "CHANGELOG.md"
@@ -113,7 +115,7 @@ for rel in "${FILES_TO_CREATE[@]}"; do
   full="$REPO_ROOT/$rel"
   if [ -e "$full" ]; then
     if [ "$UPDATE" = true ]; then
-      if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = ".github/actions/run-tests/action.yml" ] || [ "$rel" = ".github/actions/deploy/action.yml" ]; then
+      if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = ".github/actions/run-tests/action.yml" ] || [ "$rel" = ".github/actions/prepare-release/action.yml" ] || [ "$rel" = ".github/actions/deploy/action.yml" ]; then
         echo "  [preserve]  $rel (preserves custom configuration)"
       else
         echo "  [update]    $rel"
@@ -135,14 +137,14 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # Ensure parent directories exist
-mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/.github/actions/run-tests" "$REPO_ROOT/.github/actions/deploy" "$REPO_ROOT/tools"
+mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/.github/actions/run-tests" "$REPO_ROOT/.github/actions/prepare-release" "$REPO_ROOT/.github/actions/deploy" "$REPO_ROOT/tools"
 
 should_write() {
   local rel="$1"
   local full_path="$REPO_ROOT/$rel"
   
   if [ "$UPDATE" = true ]; then
-    if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = ".github/actions/run-tests/action.yml" ] || [ "$rel" = ".github/actions/deploy/action.yml" ]; then
+    if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = ".github/actions/run-tests/action.yml" ] || [ "$rel" = ".github/actions/prepare-release/action.yml" ] || [ "$rel" = ".github/actions/deploy/action.yml" ]; then
       if [ -e "$full_path" ]; then
         return 1
       fi
@@ -270,6 +272,13 @@ jobs:
       - name: 🧪 Run Automated Tests
         uses: ./.github/actions/run-tests
 
+      - name: ✏️ Prepare Release Codebase Changes
+        if: ${{ inputs.dry_run != true }}
+        uses: ./.github/actions/prepare-release
+        with:
+          version: ${{ steps.version_bump.outputs.version }}
+          is_prerelease: 'false'
+
       - name: 🏷️ Commit, Tag & Push to Main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -297,6 +306,7 @@ jobs:
           echo "Releasing version: v$VERSION"
           
           git add CHANGELOG.md
+          git add -u
           git commit -m "chore(release): v$VERSION"
           git tag -a "v$VERSION" -m "Release v$VERSION"
           git push origin main --follow-tags
@@ -366,6 +376,13 @@ jobs:
         if: ${{ inputs.run_tests != false }}
         uses: ./.github/actions/run-tests
 
+      - name: ✏️ Prepare Snapshot Codebase Changes
+        if: ${{ inputs.dry_run != true }}
+        uses: ./.github/actions/prepare-release
+        with:
+          version: ${{ steps.version_bump.outputs.version }}
+          is_prerelease: 'true'
+
       - name: 🏷️ Tag & Publish Pre-Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -389,6 +406,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          # Commit on-the-fly codebase changes if any occurred
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git add -u
+            git commit -m "chore(snapshot): v$VERSION [skip ci]"
+            git push origin "${{ github.ref_name }}"
+          fi
+
           echo "Publishing snapshot: v$VERSION (branch: ${{ github.ref_name }})"
           
           git tag -a "v$VERSION" -m "Snapshot release v$VERSION"
@@ -429,7 +453,57 @@ runs:
 EOF
 fi
 
-# 5. Composite Action: Deploy Execution Stub
+# 5. Composite Action: Prepare Release Codebase Changes
+if should_write ".github/actions/prepare-release/action.yml"; then
+cat << 'EOF' > "$REPO_ROOT/.github/actions/prepare-release/action.yml"
+name: '✏️ Prepare Release Codebase Changes'
+description: 'Applies on-the-fly codebase modifications before release commits (e.g., bumping package.json, Cargo.toml, or version constants)'
+
+inputs:
+  version:
+    description: 'Target release or snapshot version (without v prefix)'
+    required: true
+  is_prerelease:
+    description: 'Whether this is a branch snapshot pre-release (true/false)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: ✏️ Apply On-The-Fly Version Changes
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        IS_PRERELEASE="${{ inputs.is_prerelease }}"
+        
+        echo "=== ✏️ Prepare Release Codebase Changes ==="
+        echo "Version:        v$VERSION"
+        echo "Is Pre-Release: $IS_PRERELEASE"
+        
+        # ----------------------------------------------------------------------
+        # Place your project-specific on-the-fly modifications here.
+        # Any tracked files modified here are automatically committed by the release workflow!
+        #
+        # Examples:
+        #
+        # 1. Node.js (package.json & package-lock.json):
+        #    npm version "$VERSION" --no-git-tag-version --allow-same-version
+        #
+        # 2. Python (pyproject.toml):
+        #    sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+        #
+        # 3. Rust (Cargo.toml):
+        #    sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
+        #
+        # 4. Custom VERSION / constants file:
+        #    echo "$VERSION" > VERSION
+        # ----------------------------------------------------------------------
+        echo "Codebase preparation completed."
+EOF
+fi
+
+# 6. Composite Action: Deploy Execution Stub
 if should_write ".github/actions/deploy/action.yml"; then
 cat << 'EOF' > "$REPO_ROOT/.github/actions/deploy/action.yml"
 name: '🚀 Deploy Artifact'
@@ -757,9 +831,10 @@ else
   echo "  - Automated SemVer release & deployment pipeline (.github/workflows/release.yml)"
   echo "  - Branch snapshot pre-release & deployment pipeline (.github/workflows/snapshot.yml)"
   echo "  - Test suite execution action stub (.github/actions/run-tests/action.yml)"
+  echo "  - Codebase preparation action stub (.github/actions/prepare-release/action.yml)"
   echo "  - Deployment execution action stub (.github/actions/deploy/action.yml)"
   echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
   echo "  - Git tag-based versioning (no VERSION file needed)"
 fi
 echo ""
-echo "Setup is ready! Customize test and deploy steps in .github/actions/."
+echo "Setup is ready! Customize test, codebase preparation, and deploy steps in .github/actions/."

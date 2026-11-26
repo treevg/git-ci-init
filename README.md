@@ -14,6 +14,8 @@ your-repo/
 │   ├── actions/
 │   │   ├── run-tests/
 │   │   │   └── action.yml         # Test suite execution composite action (stub to plug in custom tests)
+│   │   ├── prepare-release/
+│   │   │   └── action.yml         # On-the-fly codebase preparation (e.g. bumping package.json / Cargo.toml)
 │   │   └── deploy/
 │   │       └── action.yml         # Deployment execution composite action (staging snapshots & prod releases)
 │   └── workflows/
@@ -100,5 +102,8 @@ Runs cross-platform testing across both **Ubuntu** and **macOS** on every commit
 ### 4. Modular Test Action Stub (`.github/actions/run-tests/action.yml`)
 A composite GitHub Action invoked by `ci.yml`, `release.yml`, and `snapshot.yml`. Houses the test execution commands (e.g., pytest, npm test, cargo test, ./tests/run_tests.sh) in a single shared file so tests are configured in one place across all workflows.
 
-### 5. Modular Deploy Action Stub (`.github/actions/deploy/action.yml`)
+### 5. Modular Codebase Preparation Stub (`.github/actions/prepare-release/action.yml`)
+A composite GitHub Action invoked prior to committing releases and snapshots. Allows applying on-the-fly modifications to the codebase (e.g., bumping `package.json`, `Cargo.toml`, or source version constants). Any modified tracked files are automatically committed into the release.
+
+### 6. Modular Deploy Action Stub (`.github/actions/deploy/action.yml`)
 A composite GitHub Action invoked directly at the end of `release.yml` (production) and `snapshot.yml` (staging). Houses deployment logic for package registries (npm/PyPI), Docker containers, cloud deployments, and notifications. Automatically skipped during dry runs.

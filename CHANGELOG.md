@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [unreleased]
 
+### Added
+- Added modular codebase preparation composite action (`.github/actions/prepare-release/action.yml`) invoked before release/snapshot commits to apply on-the-fly codebase changes (e.g. updating `package.json`, `Cargo.toml`, or version constants).
+
 ### Fixed
 - Fixed GitHub Actions runner failure in `.github/actions/deploy/action.yml` by replacing invalid `${{ secrets... }}` expression syntax in composite actions with standard environment variable references.
 
