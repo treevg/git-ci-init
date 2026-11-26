@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [unreleased]
 
+## [1.0.0] -- 2026-11-26
 ### Added
 - Initial release of `git-ci-init`.
 - CLI generator bootstrapping standardized CI, release workflows, versioning, testing, and changelog into any Git repository.
