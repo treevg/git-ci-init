@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [unreleased]
 
+### Fixed
+- Fixed GitHub Actions runner failure in `.github/actions/deploy/action.yml` by replacing invalid `${{ secrets... }}` expression syntax in composite actions with standard environment variable references.
+
 ## [2.0.0] -- 2026-11-26
 ### Added
 - Modular composite GitHub Actions (`.github/actions/run-tests/action.yml` and `.github/actions/deploy/action.yml`) to cleanly separate test execution and deployment steps from workflow definitions.

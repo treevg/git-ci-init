@@ -38,7 +38,7 @@ runs:
         # 3. Notification (Slack / Discord webhook):
         #    curl -X POST -H 'Content-type: application/json' \
         #      --data "{\"text\":\"🧪 New snapshot pre-release published: $VERSION\"}" \
-        #      ${{ secrets.SLACK_WEBHOOK_URL }}
+        #      "$SLACK_WEBHOOK_URL"
         # ----------------------------------------------------------------------
         echo "Snapshot deployment completed successfully."
 
@@ -71,6 +71,6 @@ runs:
         # 4. Release Announcement:
         #    curl -X POST -H 'Content-type: application/json' \
         #      --data "{\"text\":\"🚀 Version $VERSION is now live in production!\"}" \
-        #      ${{ secrets.SLACK_WEBHOOK_URL }}
+        #      "$SLACK_WEBHOOK_URL"
         # ----------------------------------------------------------------------
         echo "Production deployment completed successfully."
