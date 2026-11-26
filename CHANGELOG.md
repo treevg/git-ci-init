@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [unreleased]
+- Added post-release deployment starter workflow (`.github/workflows/deploy.yml`) triggering on `release: [published]` to handle staging snapshots and production releases separately.
+- Added `-u` / `--update` flag to `git ci-init` to safely upgrade CI/CD workflows and release tooling in existing repositories without overwriting `CHANGELOG.md`, `deploy.yml`, or custom tests.
 - Split release engineering into dedicated workflows: `release.yml` (official SemVer releases on main with `patch|minor|major` dropdown) and `snapshot.yml` (branch pre-releases on any branch).
 - Added `run_tests` and `dry_run` input checkboxes to `snapshot.yml` and `dry_run` to `release.yml` for previewing release plans safely.
 - Added Pull Request changelog linter in `ci.yml` ensuring `CHANGELOG.md` is updated on PRs (supports `[skip changelog]` in title).

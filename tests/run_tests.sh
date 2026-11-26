@@ -99,6 +99,7 @@ test_bootstrap_creates_all_files_without_version_file() {
   assert_file_exists "$repo/.github/workflows/ci.yml"
   assert_file_exists "$repo/.github/workflows/release.yml"
   assert_file_exists "$repo/.github/workflows/snapshot.yml"
+  assert_file_exists "$repo/.github/workflows/deploy.yml"
   assert_file_exists "$repo/tools/release_version.py"
   assert_file_exists "$repo/CHANGELOG.md"
   assert_file_exists "$repo/tests/run_tests.sh"
@@ -162,6 +163,41 @@ test_force_flag_overwrites_existing_files() {
   "$GIT_CI_INIT" -f >/dev/null
 
   assert_file_contains "$repo/CHANGELOG.md" "## [unreleased]"
+}
+
+test_update_flag_refreshes_workflows_and_preserves_custom_files() {
+  local repo="$TEST_SANDBOX/test_update_preserves"
+  mkdir -p "$repo" && cd "$repo"
+  git init -b main >/dev/null 2>&1
+  git config user.email "test@test.com"
+  git config user.name "Test User"
+  echo "Init" > file.txt && git add file.txt && git commit -m "Init" >/dev/null
+
+  # Bootstrap repository
+  "$GIT_CI_INIT" >/dev/null
+
+  # Add project-specific custom content
+  echo "CUSTOM USER CHANGELOG CONTENT" > CHANGELOG.md
+  echo "#!/bin/bash\necho 'CUSTOM RUN_TESTS'" > tests/run_tests.sh
+  chmod +x tests/run_tests.sh
+  echo "# CUSTOM USER DEPLOY SCRIPT" > .github/workflows/deploy.yml
+  
+  # Alter workflow to old version and delete snapshot.yml to simulate outdated repo
+  echo "# OLD CI WORKFLOW" > .github/workflows/ci.yml
+  rm -f .github/workflows/snapshot.yml
+
+  # Run git ci-init with --update
+  "$GIT_CI_INIT" -u >/dev/null
+
+  # Workflows and tools should be updated
+  assert_file_exists "$repo/.github/workflows/snapshot.yml"
+  assert "! grep -q '# OLD CI WORKFLOW' '$repo/.github/workflows/ci.yml'" "Outdated workflow should be updated"
+  assert_file_contains "$repo/.github/workflows/ci.yml" "name: 📝 Lint Changelog (PR)"
+
+  # CHANGELOG.md, tests/run_tests.sh, and custom deploy.yml MUST be preserved
+  assert_file_contains "$repo/CHANGELOG.md" "CUSTOM USER CHANGELOG CONTENT"
+  assert_file_contains "$repo/tests/run_tests.sh" "CUSTOM RUN_TESTS"
+  assert_file_contains "$repo/.github/workflows/deploy.yml" "CUSTOM USER DEPLOY SCRIPT"
 }
 
 test_generated_release_script_branch_snapshot_initial() {
@@ -251,6 +287,7 @@ run_test test_generated_test_suite_executes_successfully
 run_test test_generated_release_script_bumps_semver_from_tags
 run_test test_skip_existing_files_without_force
 run_test test_force_flag_overwrites_existing_files
+run_test test_update_flag_refreshes_workflows_and_preserves_custom_files
 run_test test_generated_release_script_branch_snapshot_initial
 run_test test_generated_release_script_branch_snapshot_incrementing_suffix
 run_test test_generated_release_script_dry_run_leaves_changelog_untouched

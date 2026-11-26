@@ -20,11 +20,13 @@ Files bootstrapped:
   .github/workflows/ci.yml        Cross-platform matrix CI (Ubuntu + macOS) on push/PR
   .github/workflows/release.yml   Manual SemVer dispatch release workflow (main branch only)
   .github/workflows/snapshot.yml  Manual branch snapshot pre-release workflow (any branch)
+  .github/workflows/deploy.yml    Post-release deployment template (staging snapshots & prod releases)
   tools/release_version.py        Git-tag SemVer bumper & CHANGELOG.md synchronizer
   CHANGELOG.md                    Keep a Changelog template with ## [unreleased]
   tests/run_tests.sh              Starter automated test runner with assertion helpers
 
 Options:
+  -u, --update      Update workflows and tools without modifying CHANGELOG.md or custom tests.
   -f, --force       Overwrite existing files if they already exist.
   -n, --dry-run     Show what files would be created without writing them.
   --version <ver>   Initial version string for tag (default: 0.1.0).
@@ -32,6 +34,7 @@ Options:
 EOF
 }
 
+UPDATE=false
 FORCE=false
 DRY_RUN=false
 INITIAL_VERSION="0.1.0"
@@ -39,6 +42,10 @@ TARGET_DIR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    -u|--update)
+      UPDATE=true
+      shift
+      ;;
     -f|--force)
       FORCE=true
       shift
@@ -95,19 +102,26 @@ FILES_TO_CREATE=(
   ".github/workflows/ci.yml"
   ".github/workflows/release.yml"
   ".github/workflows/snapshot.yml"
+  ".github/workflows/deploy.yml"
   "tools/release_version.py"
   "CHANGELOG.md"
   "tests/run_tests.sh"
 )
 
-echo "Files to bootstrap:"
+echo "Files to process:"
 for rel in "${FILES_TO_CREATE[@]}"; do
   full="$REPO_ROOT/$rel"
   if [ -e "$full" ]; then
-    if [ "$FORCE" = true ]; then
+    if [ "$UPDATE" = true ]; then
+      if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = "tests/run_tests.sh" ] || [ "$rel" = ".github/workflows/deploy.yml" ]; then
+        echo "  [preserve]  $rel (preserves custom configuration)"
+      else
+        echo "  [update]    $rel"
+      fi
+    elif [ "$FORCE" = true ]; then
       echo "  [overwrite] $rel"
     else
-      echo "  [skip]      $rel (already exists, use -f to overwrite)"
+      echo "  [skip]      $rel (already exists, use -u to update or -f to overwrite)"
     fi
   else
     echo "  [create]    $rel"
@@ -124,11 +138,23 @@ fi
 mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/tools" "$REPO_ROOT/tests"
 
 should_write() {
-  local full_path="$REPO_ROOT/$1"
+  local rel="$1"
+  local full_path="$REPO_ROOT/$rel"
+  
+  if [ "$UPDATE" = true ]; then
+    if [ "$rel" = "CHANGELOG.md" ] || [ "$rel" = "tests/run_tests.sh" ] || [ "$rel" = ".github/workflows/deploy.yml" ]; then
+      if [ -e "$full_path" ]; then
+        return 1
+      fi
+    fi
+    echo "--> Updating $rel..."
+    return 0
+  fi
+
   if [ -e "$full_path" ] && [ "$FORCE" = false ]; then
     return 1
   fi
-  echo "--> Writing $1..."
+  echo "--> Writing $rel..."
   return 0
 }
 
@@ -372,7 +398,99 @@ jobs:
 EOF
 fi
 
-# 4. tools/release_version.py
+# 4. Deploy Workflow (Post-release deployment template)
+if should_write ".github/workflows/deploy.yml"; then
+cat << 'EOF' > "$REPO_ROOT/.github/workflows/deploy.yml"
+name: 🚀 Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Manual deployment target'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: 📦 Deploy & Publish (${{ github.event.release.prerelease == true && 'Staging' || github.event.release.prerelease == false && 'Production' || inputs.target }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------------
+      # 🧪 Snapshot / Pre-Release Deployment (Staging / Dev / Test Channel)
+      # ------------------------------------------------------------------------
+      - name: 🧪 Deploy Snapshot / Staging
+        if: github.event.release.prerelease == true || inputs.target == 'staging'
+        run: |
+          VERSION="${{ github.event.release.tag_name || github.ref_name }}"
+          echo "=== 🧪 DEPLOYING SNAPSHOT PRE-RELEASE: $VERSION ==="
+          echo "Target Environment: Staging / Pre-Release Channel"
+          
+          # --------------------------------------------------------------------
+          # Place your staging deployment commands here. Examples:
+          #
+          # 1. Package Registry (pre-release tag):
+          #    npm publish --tag next
+          #    twine upload --repository testpypi dist/*
+          #
+          # 2. Docker container (beta/snapshot tag):
+          #    docker build -t my-org/my-app:$VERSION .
+          #    docker push my-org/my-app:$VERSION
+          #
+          # 3. Notification (Slack / Discord webhook):
+          #    curl -X POST -H 'Content-type: application/json' \
+          #      --data "{\"text\":\"🧪 New snapshot pre-release published: $VERSION\"}" \
+          #      ${{ secrets.SLACK_WEBHOOK_URL }}
+          # --------------------------------------------------------------------
+          echo "Snapshot deployment completed successfully."
+
+      # ------------------------------------------------------------------------
+      # 🚀 Official Release Deployment (Production / Latest Channel)
+      # ------------------------------------------------------------------------
+      - name: 🚀 Deploy Production Release
+        if: github.event.release.prerelease == false || inputs.target == 'production'
+        run: |
+          VERSION="${{ github.event.release.tag_name || github.ref_name }}"
+          echo "=== 🚀 DEPLOYING PRODUCTION RELEASE: $VERSION ==="
+          echo "Target Environment: Production / Official Release"
+          
+          # --------------------------------------------------------------------
+          # Place your production deployment commands here. Examples:
+          #
+          # 1. Package Registry (official release):
+          #    npm publish --access public
+          #    twine upload dist/*
+          #
+          # 2. Docker container (version + latest tag):
+          #    docker build -t my-org/my-app:$VERSION -t my-org/my-app:latest .
+          #    docker push my-org/my-app:$VERSION
+          #    docker push my-org/my-app:latest
+          #
+          # 3. Cloud / Server Deployment:
+          #    # e.g., deploy to AWS ECS, Kubernetes, Vercel, or custom server
+          #
+          # 4. Release Announcement:
+          #    curl -X POST -H 'Content-type: application/json' \
+          #      --data "{\"text\":\"🚀 Version $VERSION is now live in production!\"}" \
+          #      ${{ secrets.SLACK_WEBHOOK_URL }}
+          # --------------------------------------------------------------------
+          echo "Production deployment completed successfully."
+EOF
+fi
+
+# 5. tools/release_version.py
 if should_write "tools/release_version.py"; then
 cat << 'EOF' > "$REPO_ROOT/tools/release_version.py"
 #!/usr/bin/env python3
@@ -667,24 +785,33 @@ EOF
 chmod +x "$REPO_ROOT/tests/run_tests.sh"
 fi
 
-# 6. Initialize initial Git tag if repository has commits and no tags
-if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
-  EXISTING_TAGS=$(git -C "$REPO_ROOT" tag -l "v*" 2>/dev/null || true)
-  if [ -z "$EXISTING_TAGS" ]; then
-    echo "--> Tagging repository with initial version: v$INITIAL_VERSION..."
-    git -C "$REPO_ROOT" tag -a "v$INITIAL_VERSION" -m "Initial release v$INITIAL_VERSION" >/dev/null 2>&1 || true
+# 6. Initialize initial Git tag if repository has commits and no tags (skipped on update)
+if [ "$UPDATE" = false ]; then
+  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+    EXISTING_TAGS=$(git -C "$REPO_ROOT" tag -l "v*" 2>/dev/null || true)
+    if [ -z "$EXISTING_TAGS" ]; then
+      echo "--> Tagging repository with initial version: v$INITIAL_VERSION..."
+      git -C "$REPO_ROOT" tag -a "v$INITIAL_VERSION" -m "Initial release v$INITIAL_VERSION" >/dev/null 2>&1 || true
+    fi
   fi
 fi
 
 echo ""
-echo "=== Bootstrap Complete! ==="
-echo "The repository is now equipped with:"
-echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
-echo "  - Automated SemVer release pipeline (.github/workflows/release.yml)"
-echo "  - Branch snapshot pre-release pipeline (.github/workflows/snapshot.yml)"
-echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
-echo "  - Git tag-based versioning (no VERSION file needed)"
-echo "  - Automated test runner (tests/run_tests.sh)"
+if [ "$UPDATE" = true ]; then
+  echo "=== Update Complete! ==="
+  echo "The CI/CD workflows and tools/release_version.py were updated."
+  echo "Existing deploy.yml, CHANGELOG.md, and tests/run_tests.sh were preserved intact."
+else
+  echo "=== Bootstrap Complete! ==="
+  echo "The repository is now equipped with:"
+  echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
+  echo "  - Automated SemVer release pipeline (.github/workflows/release.yml)"
+  echo "  - Branch snapshot pre-release pipeline (.github/workflows/snapshot.yml)"
+  echo "  - Post-release deployment pipeline (.github/workflows/deploy.yml)"
+  echo "  - Keep a Changelog manager (tools/release_version.py & CHANGELOG.md)"
+  echo "  - Git tag-based versioning (no VERSION file needed)"
+  echo "  - Automated test runner (tests/run_tests.sh)"
+fi
 echo ""
 echo "You can verify the setup right away by running:"
 echo "  ./tests/run_tests.sh"

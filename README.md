@@ -12,8 +12,10 @@ When you run `git ci-init` in any repository, it equips the project with:
 your-repo/
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml                 # Cross-platform matrix CI (Ubuntu + macOS) on push & PR
-│       └── release.yml            # Automated SemVer release pipeline (tag & GitHub release)
+│       ├── ci.yml                 # Cross-platform matrix CI (Ubuntu + macOS) on push/PR with changelog linter
+│       ├── release.yml            # Manual SemVer release workflow for main branch
+│       ├── snapshot.yml           # Branch pre-release workflow for any branch
+│       └── deploy.yml             # Post-release deployment pipeline (staging snapshots & prod releases)
 ├── tests/
 │   └── run_tests.sh               # Standalone test runner with /tmp sandboxing & assertion helpers
 ├── tools/
@@ -53,6 +55,12 @@ cd /path/to/my-project
 git ci-init
 ```
 
+### Upgrade workflows in an existing repository (safe update):
+```bash
+cd /path/to/my-project
+git ci-init --update
+```
+
 ### In a new folder (automatically initializes Git):
 ```bash
 mkdir /path/to/new-tool
@@ -63,6 +71,7 @@ git ci-init /path/to/new-tool
 
 | Flag | Description |
 | :--- | :--- |
+| `-u`, `--update` | Update workflows and tools without overwriting `CHANGELOG.md` or custom tests. |
 | `-n`, `--dry-run` | Preview files that would be created without writing them. |
 | `-f`, `--force` | Overwrite existing files (CI workflows, version, changelog, tests). |
 | `--version <ver>` | Specify the initial version string (default: `0.1.0`). |
@@ -76,13 +85,22 @@ git ci-init /path/to/new-tool
 Runs `./tests/run_tests.sh` across both **Ubuntu** and **macOS** on every commit pushed to `main` and every Pull Request.
 
 ### 2. SemVer Release Workflow (`.github/workflows/release.yml`)
-A manual `workflow_dispatch` action:
-- Prompts for version bump type (`patch`, `minor`, `major`).
-- Runs `tools/release_version.py` to bump `VERSION` and move in-development changelog items under `## [X.Y.Z] -- YYYY-MM-DD`.
-- Runs the test suite to ensure green builds.
-- Commits, tags (`vX.Y.Z`), pushes to `main`, and creates a GitHub Release with auto-generated release notes.
+- Manual `workflow_dispatch` action restricted to `main`.
+- Prompts for version bump type (`patch`, `minor`, `major`) and includes a `dry_run` preview mode.
+- Bumps version from Git tags, promotes `CHANGELOG.md` items under `## [X.Y.Z] -- YYYY-MM-DD`, tags, and publishes a GitHub Release.
 
-### 3. Automated Test Runner (`tests/run_tests.sh`)
+### 3. Branch Snapshot Workflow (`.github/workflows/snapshot.yml`)
+- Manual `workflow_dispatch` action for any branch.
+- Bumps patch level with branch slug and auto-incrementing suffix (e.g. `1.3.4-feature-name.1`).
+- Leaves `CHANGELOG.md` untouched, tags the branch commit, and publishes a GitHub Pre-Release.
+- Includes optional checkboxes for `run_tests` and `dry_run`.
+
+### 4. Post-Release Deployment Workflow (`.github/workflows/deploy.yml`)
+- Automatically triggered on GitHub `release: [published]` (or manual dispatch).
+- Distinguishes between **snapshot pre-releases** (deploys to staging/test channels) and **official releases** (deploys to production).
+- Includes starter templates and examples for package registries (npm/PyPI), Docker images, and webhook notifications.
+
+### 5. Automated Test Runner (`tests/run_tests.sh`)
 A zero-dependency test runner equipped with:
 - Isolated `/tmp` sandboxing with automatic cleanup via `trap`.
 - Assertion helpers (`assert`, `assert_file_exists`, `assert_file_not_exists`, `assert_file_contains`).
