@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [unreleased]
 
+### Added
+- `-s` / `--standalone` option to `git ci-init` for scaffolding dependency-less, self-contained workflows and embedding `release_version.py` locally with zero external repository dependencies.
+
+### Changed
+- Converted default bootstrapped workflows into lightweight reusable caller workflows delegating to `treevg/github-workflows@v1`.
+- Removed local `release_version.py` script generation from default mode as release automation is now centralized in `treevg/github-workflows`.
+
 ## [3.0.1] -- 2026-11-27
 ### Changed
 - Relocated project-specific composite actions from `.github/actions/*` to `.ci/actions/*` to cleanly decouple repository customization from GitHub Actions workflow orchestration.

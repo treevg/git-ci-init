@@ -17,17 +17,17 @@ into the current (or specified) Git repository. Versioning is managed directly
 via Git tags (vX.Y.Z) without redundant VERSION files.
 
 Files bootstrapped:
-  .github/workflows/ci.yml        Cross-platform matrix CI (Ubuntu + macOS) on push/PR
-  .github/workflows/release.yml   Manual SemVer dispatch release & deployment (main branch only)
-  .github/workflows/snapshot.yml  Manual branch snapshot pre-release & deployment (any branch)
-  .ci/actions/run-tests/action.yml            Test suite execution stub composite action
-  .ci/actions/prepare-release/action.yml      Codebase preparation stub (e.g. bumping package version)
-  .ci/actions/deploy/action.yml               Deployment execution composite action (staging & prod)
-  .github/scripts/release_version.py          Git-tag SemVer bumper & CHANGELOG.md synchronizer
+  .github/workflows/ci.yml        Reusable CI caller (matrix testing & PR changelog linter)
+  .github/workflows/release.yml   Reusable Release caller (SemVer release & deployment)
+  .github/workflows/snapshot.yml  Reusable Snapshot caller (branch pre-release & staging deploy)
+  .ci/actions/run-tests/action.yml            Project test execution hook composite action
+  .ci/actions/prepare-release/action.yml      Project codebase preparation hook
+  .ci/actions/deploy/action.yml               Project deployment execution hook (staging & prod)
   CHANGELOG.md                    Keep a Changelog template with ## [unreleased]
 
 Options:
   -u, --update      Update workflows and tools without modifying CHANGELOG.md or custom actions in .ci/actions/.
+  -s, --standalone  Generate self-contained, dependency-less CI (embeds release scripts locally with zero external repo dependency).
   -f, --force       Overwrite existing files if they already exist.
   -n, --dry-run     Show what files would be created without writing them.
   --version <ver>   Initial version string for tag (default: 0.1.0).
@@ -38,6 +38,7 @@ EOF
 UPDATE=false
 FORCE=false
 DRY_RUN=false
+STANDALONE=false
 INITIAL_VERSION="0.1.0"
 TARGET_DIR=""
 
@@ -45,6 +46,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -u|--update)
       UPDATE=true
+      shift
+      ;;
+    -s|--standalone)
+      STANDALONE=true
       shift
       ;;
     -f|--force)
@@ -99,16 +104,28 @@ echo "Target Repository: $REPO_ROOT"
 echo "Initial Tag:       v$INITIAL_VERSION"
 echo ""
 
-FILES_TO_CREATE=(
-  ".github/workflows/ci.yml"
-  ".github/workflows/release.yml"
-  ".github/workflows/snapshot.yml"
-  ".ci/actions/run-tests/action.yml"
-  ".ci/actions/prepare-release/action.yml"
-  ".ci/actions/deploy/action.yml"
-  ".github/scripts/release_version.py"
-  "CHANGELOG.md"
-)
+if [ "$STANDALONE" = true ]; then
+  FILES_TO_CREATE=(
+    ".github/workflows/ci.yml"
+    ".github/workflows/release.yml"
+    ".github/workflows/snapshot.yml"
+    ".ci/actions/run-tests/action.yml"
+    ".ci/actions/prepare-release/action.yml"
+    ".ci/actions/deploy/action.yml"
+    ".github/scripts/release_version.py"
+    "CHANGELOG.md"
+  )
+else
+  FILES_TO_CREATE=(
+    ".github/workflows/ci.yml"
+    ".github/workflows/release.yml"
+    ".github/workflows/snapshot.yml"
+    ".ci/actions/run-tests/action.yml"
+    ".ci/actions/prepare-release/action.yml"
+    ".ci/actions/deploy/action.yml"
+    "CHANGELOG.md"
+  )
+fi
 
 echo "Files to process:"
 for rel in "${FILES_TO_CREATE[@]}"; do
@@ -137,7 +154,10 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # Ensure parent directories exist
-mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/.github/scripts" "$REPO_ROOT/.ci/actions/run-tests" "$REPO_ROOT/.ci/actions/prepare-release" "$REPO_ROOT/.ci/actions/deploy"
+mkdir -p "$REPO_ROOT/.github/workflows" "$REPO_ROOT/.ci/actions/run-tests" "$REPO_ROOT/.ci/actions/prepare-release" "$REPO_ROOT/.ci/actions/deploy"
+if [ "$STANDALONE" = true ]; then
+  mkdir -p "$REPO_ROOT/.github/scripts"
+fi
 
 should_write() {
   local rel="$1"
@@ -162,7 +182,8 @@ should_write() {
 
 # 1. CI Workflow
 if should_write ".github/workflows/ci.yml"; then
-cat << 'EOF' > "$REPO_ROOT/.github/workflows/ci.yml"
+  if [ "$STANDALONE" = true ]; then
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/ci.yml"
 name: 🧪 CI
 
 on:
@@ -198,16 +219,11 @@ jobs:
 
       - name: 🔍 Verify CHANGELOG.md was updated
         run: |
-          # Allow explicit bypass if PR title contains [skip changelog]
           if echo "${{ github.event.pull_request.title }}" | grep -iq "\[skip changelog\]"; then
             echo "Skipping changelog check: '[skip changelog]' found in PR title."
             exit 0
           fi
-
-          # Ensure the base branch ref is available
           git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }} || true
-
-          # Check if CHANGELOG.md was modified in this pull request
           if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^CHANGELOG\.md$"; then
             echo "✓ CHANGELOG.md has been modified in this pull request."
           else
@@ -215,11 +231,28 @@ jobs:
             exit 1
           fi
 EOF
+  else
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/ci.yml"
+name: 🧪 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    uses: treevg/github-workflows/.github/workflows/ci.yml@v1
+EOF
+  fi
 fi
 
 # 2. Release Workflow (Official SemVer releases on main)
 if should_write ".github/workflows/release.yml"; then
-cat << 'EOF' > "$REPO_ROOT/.github/workflows/release.yml"
+  if [ "$STANDALONE" = true ]; then
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/release.yml"
 name: 🏷️ Release
 
 on:
@@ -258,7 +291,7 @@ jobs:
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: 🔢 Bump Version & Update Changelog
         id: version_bump
@@ -270,17 +303,18 @@ jobs:
           python3 .github/scripts/release_version.py ${{ github.event.inputs.bump }} $DRY_RUN_FLAG
 
       - name: 🧪 Run Automated Tests
+        if: hashFiles('.ci/actions/run-tests/action.yml') != ''
         uses: ./.ci/actions/run-tests
 
       - name: ✏️ Prepare Release Codebase Changes
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && hashFiles('.ci/actions/prepare-release/action.yml') != '' }}
         uses: ./.ci/actions/prepare-release
         with:
           version: ${{ steps.version_bump.outputs.version }}
           is_prerelease: 'false'
 
       - name: 🚀 Deploy Production Release
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && hashFiles('.ci/actions/deploy/action.yml') != '' }}
         uses: ./.ci/actions/deploy
         with:
           target: production
@@ -312,29 +346,64 @@ jobs:
           
           echo "Releasing version: v$VERSION"
           
-          git add CHANGELOG.md
           git add -u
           git commit -m "chore(release): v$VERSION"
           git tag -a "v$VERSION" -m "Release v$VERSION"
-          git push origin main --follow-tags
+          git push origin main
+          git push origin "v$VERSION"
 
           # Create GitHub Release
-          gh release create "v$VERSION" \
-            --title "Release v$VERSION" \
-            --generate-notes
+          CHANGELOG_NOTES="${{ steps.version_bump.outputs.notes_path }}"
+          if [ -f "$CHANGELOG_NOTES" ] && [ -s "$CHANGELOG_NOTES" ]; then
+            gh release create "v$VERSION"               --title "Release v$VERSION"               --notes-file "$CHANGELOG_NOTES"
+          else
+            gh release create "v$VERSION"               --title "Release v$VERSION"               --generate-notes
+          fi
 EOF
+  else
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/release.yml"
+name: 🏷️ Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'SemVer Version Bump'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry run (preview release without committing, tagging, or pushing)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    uses: treevg/github-workflows/.github/workflows/release.yml@v1
+    with:
+      bump: ${{ inputs.bump }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+EOF
+  fi
 fi
 
-# 3. Snapshot Workflow (Pre-releases on any branch)
+# 3. Snapshot Workflow
 if should_write ".github/workflows/snapshot.yml"; then
-cat << 'EOF' > "$REPO_ROOT/.github/workflows/snapshot.yml"
+  if [ "$STANDALONE" = true ]; then
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/snapshot.yml"
 name: 📸 Snapshot
 
 on:
   workflow_dispatch:
     inputs:
       run_tests:
-        description: 'Run automated tests'
+        description: 'Run automated test suite before pre-release'
         required: false
         default: true
         type: boolean
@@ -361,7 +430,7 @@ jobs:
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: 🔢 Calculate Snapshot Version
         id: version_bump
@@ -373,18 +442,18 @@ jobs:
           python3 .github/scripts/release_version.py snapshot --branch "${{ github.ref_name }}" $DRY_RUN_FLAG
 
       - name: 🧪 Run Automated Tests
-        if: ${{ inputs.run_tests != false }}
+        if: ${{ inputs.run_tests != false && hashFiles('.ci/actions/run-tests/action.yml') != '' }}
         uses: ./.ci/actions/run-tests
 
       - name: ✏️ Prepare Snapshot Codebase Changes
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && hashFiles('.ci/actions/prepare-release/action.yml') != '' }}
         uses: ./.ci/actions/prepare-release
         with:
           version: ${{ steps.version_bump.outputs.version }}
           is_prerelease: 'true'
 
       - name: 🧪 Deploy Snapshot / Staging
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && hashFiles('.ci/actions/deploy/action.yml') != '' }}
         uses: ./.ci/actions/deploy
         with:
           target: staging
@@ -413,11 +482,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Commit on-the-fly codebase changes if any occurred
-          if ! git diff --quiet || ! git diff --cached --quiet; then
+          if ! git diff --quiet || ! git diff --staged --quiet; then
             git add -u
-            git commit -m "chore(snapshot): v$VERSION [skip ci]"
-            git push origin "${{ github.ref_name }}"
+            git commit -m "chore(snapshot): prepare v$VERSION"
+            git push origin HEAD:${{ github.ref_name }}
           fi
 
           echo "Publishing snapshot: v$VERSION (branch: ${{ github.ref_name }})"
@@ -425,12 +493,35 @@ jobs:
           git tag -a "v$VERSION" -m "Snapshot release v$VERSION"
           git push origin "v$VERSION"
 
-          # Create GitHub Pre-Release
-          gh release create "v$VERSION" \
-            --title "Release v$VERSION" \
-            --prerelease \
-            --generate-notes
+          gh release create "v$VERSION"             --title "Release v$VERSION"             --prerelease             --generate-notes
 EOF
+  else
+    cat << 'EOF' > "$REPO_ROOT/.github/workflows/snapshot.yml"
+name: 📸 Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: 'Run automated test suite before pre-release'
+        required: false
+        default: true
+        type: boolean
+      dry_run:
+        description: 'Dry run (preview snapshot version without committing, tagging, or pushing)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  snapshot:
+    uses: treevg/github-workflows/.github/workflows/snapshot.yml@v1
+    with:
+      run_tests: ${{ inputs.run_tests }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+EOF
+  fi
 fi
 
 # 4. Composite Action: Run Tests Stub
@@ -585,8 +676,8 @@ runs:
 EOF
 fi
 
-# 7. .github/scripts/release_version.py
-if should_write ".github/scripts/release_version.py"; then
+if [ "$STANDALONE" = true ]; then
+  if should_write ".github/scripts/release_version.py"; then
 cat << 'EOF' > "$REPO_ROOT/.github/scripts/release_version.py"
 #!/usr/bin/env python3
 import os
@@ -789,7 +880,16 @@ def main():
 if __name__ == '__main__':
     main()
 EOF
-chmod +x "$REPO_ROOT/.github/scripts/release_version.py"
+    chmod +x "$REPO_ROOT/.github/scripts/release_version.py"
+  fi
+else
+  # Clean up obsolete .github/scripts/release_version.py if present
+  if [ -f "$REPO_ROOT/.github/scripts/release_version.py" ]; then
+    rm -f "$REPO_ROOT/.github/scripts/release_version.py"
+    rmdir "$REPO_ROOT/.github/scripts" 2>/dev/null || true
+  fi
+fi
+
 # Clean up obsolete tools/ folder if release_version.py was moved from it
 if [ -d "$REPO_ROOT/tools" ]; then
   rm -f "$REPO_ROOT/tools/release_version.py"
@@ -808,7 +908,6 @@ if [ -d "$REPO_ROOT/.github/actions" ]; then
     fi
   done
   rmdir "$REPO_ROOT/.github/actions" 2>/dev/null || true
-fi
 fi
 
 # 4. CHANGELOG.md
@@ -841,18 +940,29 @@ fi
 echo ""
 if [ "$UPDATE" = true ]; then
   echo "=== Update Complete! ==="
-  echo "The CI/CD workflows and .github/scripts/release_version.py were updated."
+  if [ "$STANDALONE" = true ]; then
+    echo "The standalone CI/CD workflows and .github/scripts/release_version.py were updated."
+  else
+    echo "The CI/CD workflows were updated to call treevg/github-workflows@v1."
+  fi
   echo "Existing custom actions and CHANGELOG.md were preserved intact."
 else
   echo "=== Bootstrap Complete! ==="
   echo "The repository is now equipped with:"
-  echo "  - Cross-platform CI matrix testing on push/PR (.github/workflows/ci.yml)"
-  echo "  - Automated SemVer release & deployment pipeline (.github/workflows/release.yml)"
-  echo "  - Branch snapshot pre-release & deployment pipeline (.github/workflows/snapshot.yml)"
-  echo "  - Test suite execution action stub (.ci/actions/run-tests/action.yml)"
-  echo "  - Codebase preparation action stub (.ci/actions/prepare-release/action.yml)"
-  echo "  - Deployment execution action stub (.ci/actions/deploy/action.yml)"
-  echo "  - Keep a Changelog manager (.github/scripts/release_version.py & CHANGELOG.md)"
+  if [ "$STANDALONE" = true ]; then
+    echo "  - Standalone CI matrix testing (.github/workflows/ci.yml)"
+    echo "  - Standalone SemVer release pipeline (.github/workflows/release.yml)"
+    echo "  - Standalone branch snapshot pipeline (.github/workflows/snapshot.yml)"
+    echo "  - Standalone Keep a Changelog manager (.github/scripts/release_version.py & CHANGELOG.md)"
+  else
+    echo "  - Reusable CI workflow caller (.github/workflows/ci.yml -> treevg/github-workflows@v1)"
+    echo "  - Reusable SemVer release workflow caller (.github/workflows/release.yml -> treevg/github-workflows@v1)"
+    echo "  - Reusable branch snapshot workflow caller (.github/workflows/snapshot.yml -> treevg/github-workflows@v1)"
+    echo "  - Keep a Changelog template (CHANGELOG.md)"
+  fi
+  echo "  - Test suite execution hook (.ci/actions/run-tests/action.yml)"
+  echo "  - Codebase preparation hook (.ci/actions/prepare-release/action.yml)"
+  echo "  - Deployment execution hook (.ci/actions/deploy/action.yml)"
   echo "  - Git tag-based versioning (no VERSION file needed)"
 fi
 echo ""

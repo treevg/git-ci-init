@@ -19,12 +19,10 @@ your-repo/
 │       └── deploy/
 │           └── action.yml         # Deployment execution composite action (staging snapshots & prod releases)
 ├── .github/
-│   ├── scripts/
-│   │   └── release_version.py     # SemVer bumper managing Git tags & Keep a Changelog standard
 │   └── workflows/
-│       ├── ci.yml                 # Cross-platform matrix CI (Ubuntu + macOS) on push/PR with changelog linter
-│       ├── release.yml            # Manual SemVer release & production deploy workflow (main branch only)
-│       └── snapshot.yml           # Branch pre-release & staging deploy workflow (any branch)
+│       ├── ci.yml                 # Reusable CI caller invoking treevg/github-workflows@v1
+│       ├── release.yml            # Reusable Release caller invoking treevg/github-workflows@v1
+│       └── snapshot.yml           # Reusable Snapshot caller invoking treevg/github-workflows@v1
 └── CHANGELOG.md                   # Keep a Changelog template with the ## [unreleased] placeholder
 ```
 
@@ -72,11 +70,19 @@ mkdir /path/to/new-tool
 git ci-init /path/to/new-tool
 ```
 
+### Standalone (Dependency-less) Mode:
+```bash
+cd /path/to/my-project
+git ci-init --standalone
+```
+Bootstraps self-contained workflows and embeds `release_version.py` locally with **zero external repository dependencies** (ideal for isolated or air-gapped repositories).
+
 ### Options
 
 | Flag | Description |
 | :--- | :--- |
 | `-u`, `--update` | Update workflows and tools without overwriting `CHANGELOG.md` or custom actions in `.ci/actions/`. |
+| `-s`, `--standalone` | Scaffold self-contained, dependency-less CI (embeds release scripts locally with zero external repo dependency). |
 | `-n`, `--dry-run` | Preview files that would be created without writing them. |
 | `-f`, `--force` | Overwrite existing files (CI workflows, version, changelog). |
 | `--version <ver>` | Specify the initial version string (default: `0.1.0`). |
@@ -86,19 +92,14 @@ git ci-init /path/to/new-tool
 
 ## The Bootstrapped Components
 
-### 1. Matrix CI Workflow (`.github/workflows/ci.yml`)
-Runs cross-platform testing across both **Ubuntu** and **macOS** on every commit pushed to `main` and every Pull Request, invoking the modular composite action `./.ci/actions/run-tests`.
+### 1. Matrix CI Caller Workflow (`.github/workflows/ci.yml`)
+Thin caller workflow invoking `treevg/github-workflows/.github/workflows/ci.yml@v1` to execute cross-platform matrix testing (Ubuntu + macOS) and PR changelog validation.
 
-### 2. SemVer Release Workflow (`.github/workflows/release.yml`)
-- Manual `workflow_dispatch` action restricted to `main`.
-- Prompts for version bump type (`patch`, `minor`, `major`) and includes a `dry_run` preview mode.
-- Bumps version from Git tags, promotes `CHANGELOG.md` items under `## [X.Y.Z] -- YYYY-MM-DD`, tags, publishes a GitHub Release, and automatically triggers `./.ci/actions/deploy` (target: `production`).
+### 2. SemVer Release Caller Workflow (`.github/workflows/release.yml`)
+Thin caller workflow invoking `treevg/github-workflows/.github/workflows/release.yml@v1` for official SemVer releases on `main`, running test/prep/deploy hooks, atomic commit/tag, and GitHub Releases.
 
-### 3. Branch Snapshot Workflow (`.github/workflows/snapshot.yml`)
-- Manual `workflow_dispatch` action for any branch.
-- Bumps patch level with branch slug and auto-incrementing suffix (e.g. `1.3.4-feature-name.1`).
-- Leaves `CHANGELOG.md` untouched, tags the branch commit, publishes a GitHub Pre-Release, and automatically triggers `./.ci/actions/deploy` (target: `staging`).
-- Includes optional checkboxes for `run_tests` and `dry_run`.
+### 3. Branch Snapshot Caller Workflow (`.github/workflows/snapshot.yml`)
+Thin caller workflow invoking `treevg/github-workflows/.github/workflows/snapshot.yml@v1` for branch pre-releases, running test/prep/staging deploy hooks, and GitHub Pre-Releases.
 
 ### 4. Modular Test Action Stub (`.ci/actions/run-tests/action.yml`)
 A composite GitHub Action invoked by `ci.yml`, `release.yml`, and `snapshot.yml`. Houses the test execution commands (e.g., pytest, npm test, cargo test, ./tests/run_tests.sh) in a single shared file so tests are configured in one place across all workflows.
