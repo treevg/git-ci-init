@@ -10,20 +10,21 @@ When you run `git ci-init` in any repository, it equips the project with:
 
 ```text
 your-repo/
+├── .ci/
+│   └── actions/
+│       ├── run-tests/
+│       │   └── action.yml         # Test suite execution composite action (stub to plug in custom tests)
+│       ├── prepare-release/
+│       │   └── action.yml         # On-the-fly codebase preparation (e.g. bumping package.json / Cargo.toml)
+│       └── deploy/
+│           └── action.yml         # Deployment execution composite action (staging snapshots & prod releases)
 ├── .github/
-│   ├── actions/
-│   │   ├── run-tests/
-│   │   │   └── action.yml         # Test suite execution composite action (stub to plug in custom tests)
-│   │   ├── prepare-release/
-│   │   │   └── action.yml         # On-the-fly codebase preparation (e.g. bumping package.json / Cargo.toml)
-│   │   └── deploy/
-│   │       └── action.yml         # Deployment execution composite action (staging snapshots & prod releases)
+│   ├── scripts/
+│   │   └── release_version.py     # SemVer bumper managing Git tags & Keep a Changelog standard
 │   └── workflows/
 │       ├── ci.yml                 # Cross-platform matrix CI (Ubuntu + macOS) on push/PR with changelog linter
 │       ├── release.yml            # Manual SemVer release & production deploy workflow (main branch only)
 │       └── snapshot.yml           # Branch pre-release & staging deploy workflow (any branch)
-├── tools/
-│   └── release_version.py         # SemVer bumper managing Git tags & Keep a Changelog standard
 └── CHANGELOG.md                   # Keep a Changelog template with the ## [unreleased] placeholder
 ```
 
@@ -75,7 +76,7 @@ git ci-init /path/to/new-tool
 
 | Flag | Description |
 | :--- | :--- |
-| `-u`, `--update` | Update workflows and tools without overwriting `CHANGELOG.md` or custom actions in `.github/actions/`. |
+| `-u`, `--update` | Update workflows and tools without overwriting `CHANGELOG.md` or custom actions in `.ci/actions/`. |
 | `-n`, `--dry-run` | Preview files that would be created without writing them. |
 | `-f`, `--force` | Overwrite existing files (CI workflows, version, changelog). |
 | `--version <ver>` | Specify the initial version string (default: `0.1.0`). |
@@ -86,24 +87,24 @@ git ci-init /path/to/new-tool
 ## The Bootstrapped Components
 
 ### 1. Matrix CI Workflow (`.github/workflows/ci.yml`)
-Runs cross-platform testing across both **Ubuntu** and **macOS** on every commit pushed to `main` and every Pull Request, invoking the modular composite action `./.github/actions/run-tests`.
+Runs cross-platform testing across both **Ubuntu** and **macOS** on every commit pushed to `main` and every Pull Request, invoking the modular composite action `./.ci/actions/run-tests`.
 
 ### 2. SemVer Release Workflow (`.github/workflows/release.yml`)
 - Manual `workflow_dispatch` action restricted to `main`.
 - Prompts for version bump type (`patch`, `minor`, `major`) and includes a `dry_run` preview mode.
-- Bumps version from Git tags, promotes `CHANGELOG.md` items under `## [X.Y.Z] -- YYYY-MM-DD`, tags, publishes a GitHub Release, and automatically triggers `./.github/actions/deploy` (target: `production`).
+- Bumps version from Git tags, promotes `CHANGELOG.md` items under `## [X.Y.Z] -- YYYY-MM-DD`, tags, publishes a GitHub Release, and automatically triggers `./.ci/actions/deploy` (target: `production`).
 
 ### 3. Branch Snapshot Workflow (`.github/workflows/snapshot.yml`)
 - Manual `workflow_dispatch` action for any branch.
 - Bumps patch level with branch slug and auto-incrementing suffix (e.g. `1.3.4-feature-name.1`).
-- Leaves `CHANGELOG.md` untouched, tags the branch commit, publishes a GitHub Pre-Release, and automatically triggers `./.github/actions/deploy` (target: `staging`).
+- Leaves `CHANGELOG.md` untouched, tags the branch commit, publishes a GitHub Pre-Release, and automatically triggers `./.ci/actions/deploy` (target: `staging`).
 - Includes optional checkboxes for `run_tests` and `dry_run`.
 
-### 4. Modular Test Action Stub (`.github/actions/run-tests/action.yml`)
+### 4. Modular Test Action Stub (`.ci/actions/run-tests/action.yml`)
 A composite GitHub Action invoked by `ci.yml`, `release.yml`, and `snapshot.yml`. Houses the test execution commands (e.g., pytest, npm test, cargo test, ./tests/run_tests.sh) in a single shared file so tests are configured in one place across all workflows.
 
-### 5. Modular Codebase Preparation Stub (`.github/actions/prepare-release/action.yml`)
+### 5. Modular Codebase Preparation Stub (`.ci/actions/prepare-release/action.yml`)
 A composite GitHub Action invoked prior to committing releases and snapshots. Allows applying on-the-fly modifications to the codebase (e.g., bumping `package.json`, `Cargo.toml`, or source version constants). Any modified tracked files are automatically committed into the release.
 
-### 6. Modular Deploy Action Stub (`.github/actions/deploy/action.yml`)
+### 6. Modular Deploy Action Stub (`.ci/actions/deploy/action.yml`)
 A composite GitHub Action invoked directly at the end of `release.yml` (production) and `snapshot.yml` (staging). Houses deployment logic for package registries (npm/PyPI), Docker containers, cloud deployments, and notifications. Automatically skipped during dry runs.
